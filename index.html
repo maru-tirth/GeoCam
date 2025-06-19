@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>GeoCam - Location Camera</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet" />
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet" />
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="app-logo">
+        <i class="fas fa-camera-retro"></i> <span>GeoCam</span>
+    </div>
+
+    <div class="container-fluid">
+        <div class="main-container">
+            <div class="text-center mb-3">
+                <h1 class="fw-bold" style="color: var(--primary-purple);">
+                    <i class="fas fa-camera-retro me-2"></i>GeoCam
+                </h1>
+                <p class="text-muted">Capture photos and videos with exact location & timestamp</p>
+            </div>
+
+            <div class="live-clock" id="liveClock">--/--/---- | --:--:--</div>
+
+            <div class="row">
+                <div class="col-lg-8 col-md-7">
+                    <div class="camera-container">
+                        <div class="status-indicator" id="statusIndicator">Initializing...</div>
+                        <div class="mode-switch">
+                            <div class="btn-group btn-group-sm">
+                                <button type="button" class="btn active" id="photoModeBtn" onclick="app.setMode('photo')">
+                                    <i class="fas fa-camera me-1"></i> Photo
+                                </button>
+                                <button type="button" class="btn" id="videoModeBtn" onclick="app.setMode('video')">
+                                    <i class="fas fa-video me-1"></i> Video
+                                </button>
+                            </div>
+                        </div>
+                        <video id="video" autoplay muted playsinline></video>
+                        <canvas id="canvas" style="display:none;"></canvas>
+                        <img id="capturedImage" style="display:none;" alt="Captured" />
+                        <div class="loading-spinner" id="loadingSpinner" style="display:none;">
+                            <div class="spinner-border" role="status">
+                                <span class="visually-hidden">Processing...</span>
+                            </div>
+                        </div>
+                        <div class="controls">
+                            <button class="btn control-btn" id="flashBtn" title="Flash">
+                                <i class="fas fa-bolt"></i>
+                            </button>
+                            <button class="btn capture-btn" id="captureBtn">
+                                <i class="fas fa-camera" id="captureIcon"></i>
+                            </button>
+                            <button class="btn control-btn" id="switchBtn" title="Switch Camera">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-lg-4 col-md-5">
+                    <div class="info-card">
+                        <div class="info-item">
+                            <i class="fas fa-clock"></i>
+                            <div>
+                                <small>Current Time</small>
+                                <div id="currentTime">--:--:--</div>
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <i class="fas fa-calendar"></i>
+                            <div>
+                                <small>Date</small>
+                                <div id="currentDate">--/--/----</div>
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <i class="fas fa-map-marker-alt"></i>
+                            <div>
+                                <small>Coordinates</small>
+                                <div id="coordinates">Loading...</div>
+                            </div>
+                        </div>
+                        <div class="info-item">
+                            <i class="fas fa-home"></i>
+                            <div>
+                                <small>Address</small>
+                                <div id="address">Fetching...</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="map"></div>
+                </div>
+            </div>
+
+            <div class="mt-4">
+                <h5 class="section-title">
+                    <i class="fas fa-images"></i>Captured Media
+                </h5>
+                <div class="media-gallery" id="mediaGallery"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+    <script src="script.js"></script>
+</body>
+
+</html>
