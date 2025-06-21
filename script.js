@@ -220,7 +220,7 @@ class GeoCam {
       ctx.drawImage(this.video, 0, 0);
 
       // Create final canvas with footer
-      const footerHeight = 120;
+      const footerHeight = this.getResponsiveFooterHeight();
       const finalCanvas = document.createElement("canvas");
       finalCanvas.width = this.canvas.width;
       finalCanvas.height = this.canvas.height + footerHeight;
@@ -257,9 +257,19 @@ class GeoCam {
     }
   }
 
+  getResponsiveFooterHeight() {
+    const width = this.canvas.width;
+    if (width <= 480) return 100; // Mobile
+    if (width <= 768) return 120; // Tablet
+    return 140; // Desktop
+  }
+
   async drawFooter(ctx, startY, width, height) {
-    // Footer background
-    ctx.fillStyle = "rgba(0, 0, 0, 0.85)";
+    // Footer background with gradient
+    const gradient = ctx.createLinearGradient(0, startY, 0, startY + height);
+    gradient.addColorStop(0, "rgba(0, 0, 0, 0.9)");
+    gradient.addColorStop(1, "rgba(20, 20, 30, 0.95)");
+    ctx.fillStyle = gradient;
     ctx.fillRect(0, startY, width, height);
 
     const now = new Date();
@@ -269,56 +279,200 @@ class GeoCam {
     const lng = this.currentPosition?.longitude?.toFixed(6) || "N/A";
 
     let addressStr = this.currentAddress || "Address not available";
-    if (addressStr.length > 60) {
-      addressStr = addressStr.substring(0, 57) + "...";
+    const maxAddressLength = width < 800 ? 40 : width < 1200 ? 55 : 70;
+    if (addressStr.length > maxAddressLength) {
+      addressStr = addressStr.substring(0, maxAddressLength - 3) + "...";
     }
 
+    // Responsive font sizes
+    const titleSize = Math.max(12, Math.min(18, width / 50));
+    const textSize = Math.max(10, Math.min(14, width / 80));
+    const smallTextSize = Math.max(8, Math.min(12, width / 100));
+
     // Left side - Text info
+    const leftMargin = width * 0.02;
+    const textStartY = startY + height * 0.2;
+
+    // GeoCam title
     ctx.fillStyle = "#B8BFE6";
-    ctx.font = "bold 16px Poppins, Arial, sans-serif";
-    ctx.fillText("GeoCam", 20, startY + 25);
+    ctx.font = `bold ${titleSize}px Poppins, Arial, sans-serif`;
+    ctx.fillText("GeoCam", leftMargin, textStartY);
 
+    // Date and time
     ctx.fillStyle = "white";
-    ctx.font = "12px Poppins, Arial, sans-serif";
-    ctx.fillText(`📅 ${dateStr} | ⏰ ${timeStr}`, 20, startY + 45);
-    ctx.fillText(`📍 ${lat}, ${lng}`, 20, startY + 65);
-    ctx.fillText(`🏠 ${addressStr}`, 20, startY + 85);
+    ctx.font = `${textSize}px Poppins, Arial, sans-serif`;
+    const line2Y = textStartY + height * 0.25;
+    ctx.fillText(`📅 ${dateStr} | ⏰ ${timeStr}`, leftMargin, line2Y);
 
-    // Right side - Mini map
-    if (this.currentPosition && this.map) {
+    // Coordinates
+    const line3Y = line2Y + height * 0.25;
+    ctx.fillText(`📍 ${lat}, ${lng}`, leftMargin, line3Y);
+
+    // Address
+    const line4Y = line3Y + height * 0.25;
+    ctx.fillText(`🏠 ${addressStr}`, leftMargin, line4Y);
+
+    // Right side - Map
+    if (this.currentPosition) {
       try {
-        const mapSize = 140;
-        const mapX = width - mapSize - 20;
-        const mapY = startY + 15;
+        const mapSize = Math.min(height * 0.8, width * 0.15, 120);
+        const mapX = width - mapSize - width * 0.02;
+        const mapY = startY + height * 0.1;
 
-        // Create a simple map representation
-        ctx.fillStyle = "#E6E9F9";
-        ctx.fillRect(mapX, mapY, mapSize, 90);
+        // Get map tile URL for the current location
+        const zoom = 16;
+        const tileX = Math.floor(
+          ((this.currentPosition.longitude + 180) / 360) * Math.pow(2, zoom)
+        );
+        const tileY = Math.floor(
+          ((1 -
+            Math.log(
+              Math.tan((this.currentPosition.latitude * Math.PI) / 180) +
+                1 / Math.cos((this.currentPosition.latitude * Math.PI) / 180)
+            ) /
+              Math.PI) /
+            2) *
+            Math.pow(2, zoom)
+        );
+
+        // Create multiple tile requests for better coverage
+        const mapCanvas = document.createElement("canvas");
+        mapCanvas.width = mapSize;
+        mapCanvas.height = mapSize;
+        const mapCtx = mapCanvas.getContext("2d");
+
+        try {
+          // Try to load actual map tiles
+          const tilePromises = [];
+          const tileSize = 256;
+          const tilesNeeded = Math.ceil(mapSize / tileSize) + 1;
+
+          for (let dx = -1; dx < tilesNeeded; dx++) {
+            for (let dy = -1; dy < tilesNeeded; dy++) {
+              const tileXPos = tileX + dx;
+              const tileYPos = tileY + dy;
+              const tileUrl = `https://tile.openstreetmap.org/${zoom}/${tileXPos}/${tileYPos}.png`;
+
+              tilePromises.push(
+                new Promise((resolve) => {
+                  const img = new Image();
+                  img.crossOrigin = "anonymous";
+                  img.onload = () => resolve({ img, dx, dy });
+                  img.onerror = () => resolve(null);
+                  img.src = tileUrl;
+                  setTimeout(() => resolve(null), 1000); // Timeout after 1 second
+                })
+              );
+            }
+          }
+
+          const tiles = await Promise.all(tilePromises);
+          let tilesLoaded = false;
+
+          tiles.forEach((tile) => {
+            if (tile && tile.img) {
+              const x = tile.dx * tileSize;
+              const y = tile.dy * tileSize;
+              mapCtx.drawImage(tile.img, x, y, tileSize, tileSize);
+              tilesLoaded = true;
+            }
+          });
+
+          if (tilesLoaded) {
+            // Draw the map
+            ctx.drawImage(mapCanvas, mapX, mapY, mapSize, mapSize);
+          } else {
+            throw new Error("No tiles loaded");
+          }
+        } catch (tileError) {
+          console.log("Using fallback map design");
+          // Fallback: Draw a stylized map background
+          const mapGradient = ctx.createRadialGradient(
+            mapX + mapSize / 2,
+            mapY + mapSize / 2,
+            0,
+            mapX + mapSize / 2,
+            mapY + mapSize / 2,
+            mapSize / 2
+          );
+          mapGradient.addColorStop(0, "#E8F4FD");
+          mapGradient.addColorStop(0.7, "#B3D9FF");
+          mapGradient.addColorStop(1, "#7CB3E8");
+
+          ctx.fillStyle = mapGradient;
+          ctx.fillRect(mapX, mapY, mapSize, mapSize);
+
+          // Add some "street" lines
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          // Horizontal lines
+          for (let i = 0; i < 4; i++) {
+            const y = mapY + (mapSize / 4) * (i + 0.5);
+            ctx.moveTo(mapX, y);
+            ctx.lineTo(mapX + mapSize, y);
+          }
+          // Vertical lines
+          for (let i = 0; i < 4; i++) {
+            const x = mapX + (mapSize / 4) * (i + 0.5);
+            ctx.moveTo(x, mapY);
+            ctx.lineTo(x, mapY + mapSize);
+          }
+          ctx.stroke();
+        }
+
+        // Draw border around map
         ctx.strokeStyle = "#4254D3";
         ctx.lineWidth = 2;
-        ctx.strokeRect(mapX, mapY, mapSize, 90);
+        ctx.strokeRect(mapX, mapY, mapSize, mapSize);
 
-        // Draw crosshair for location
+        // Draw location marker (crosshair)
         const centerX = mapX + mapSize / 2;
-        const centerY = mapY + 45;
+        const centerY = mapY + mapSize / 2;
 
+        // Outer circle
+        ctx.fillStyle = "rgba(255, 71, 87, 0.3)";
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, 12, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Inner crosshair
         ctx.strokeStyle = "#ff4757";
         ctx.lineWidth = 3;
         ctx.beginPath();
-        ctx.moveTo(centerX - 10, centerY);
-        ctx.lineTo(centerX + 10, centerY);
-        ctx.moveTo(centerX, centerY - 10);
-        ctx.lineTo(centerX, centerY + 10);
+        ctx.moveTo(centerX - 8, centerY);
+        ctx.lineTo(centerX + 8, centerY);
+        ctx.moveTo(centerX, centerY - 8);
+        ctx.lineTo(centerX, centerY + 8);
         ctx.stroke();
+
+        // Center dot
+        ctx.fillStyle = "#ff4757";
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, 2, 0, 2 * Math.PI);
+        ctx.fill();
 
         // Add map label
         ctx.fillStyle = "#4254D3";
-        ctx.font = "bold 10px Poppins, Arial, sans-serif";
-        ctx.fillText("Location Map", mapX, mapY - 5);
+        ctx.font = `bold ${smallTextSize}px Poppins, Arial, sans-serif`;
+        const labelY = mapY - 8;
+        ctx.fillText("Location Map", mapX, labelY);
       } catch (error) {
         console.error("Map drawing error:", error);
+        // Ultra fallback - just show a location icon
+        ctx.fillStyle = "#4254D3";
+        ctx.font = `${textSize * 2}px Arial, sans-serif`;
+        ctx.fillText("📍", width - 50, startY + height / 2);
       }
     }
+
+    // Add a subtle top border to the footer
+    ctx.strokeStyle = "rgba(178, 191, 230, 0.5)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, startY);
+    ctx.lineTo(width, startY);
+    ctx.stroke();
   }
 
   toggleVideo() {
