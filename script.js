@@ -25,6 +25,10 @@ class GeoCam {
     this.flashActive = false;
     this.track = null;
     this.currentMode = "photo";
+    this.videoProcessor = null;
+    this.recordingCanvas = null;
+    this.recordingContext = null;
+    this.animationId = null;
 
     this.init();
   }
@@ -161,10 +165,7 @@ class GeoCam {
           attribution: "© OpenStreetMap contributors",
         }).addTo(this.map);
 
-        L.marker([pos.coords.latitude, pos.coords.longitude])
-          .addTo(this.map)
-          .bindPopup("You are here")
-          .openPopup();
+        L.marker([pos.coords.latitude, pos.coords.longitude]).addTo(this.map);
       },
       (error) => {
         console.error("Geolocation error:", error);
@@ -426,31 +427,42 @@ class GeoCam {
         ctx.lineWidth = 2;
         ctx.strokeRect(mapX, mapY, mapSize, mapSize);
 
-        // Draw location marker (crosshair)
+        // Draw location pin marker
         const centerX = mapX + mapSize / 2;
         const centerY = mapY + mapSize / 2;
 
-        // Outer circle
-        ctx.fillStyle = "rgba(255, 71, 87, 0.3)";
+        // Pin shadow
+        ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
         ctx.beginPath();
-        ctx.arc(centerX, centerY, 12, 0, 2 * Math.PI);
+        ctx.ellipse(centerX + 1, centerY + 8, 4, 2, 0, 0, 2 * Math.PI);
         ctx.fill();
 
-        // Inner crosshair
-        ctx.strokeStyle = "#ff4757";
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(centerX - 8, centerY);
-        ctx.lineTo(centerX + 8, centerY);
-        ctx.moveTo(centerX, centerY - 8);
-        ctx.lineTo(centerX, centerY + 8);
-        ctx.stroke();
-
-        // Center dot
+        // Pin body (teardrop shape)
         ctx.fillStyle = "#ff4757";
         ctx.beginPath();
-        ctx.arc(centerX, centerY, 2, 0, 2 * Math.PI);
+        ctx.arc(centerX, centerY - 6, 8, 0, 2 * Math.PI);
         ctx.fill();
+
+        // Pin tip
+        ctx.beginPath();
+        ctx.moveTo(centerX, centerY + 2);
+        ctx.lineTo(centerX - 4, centerY - 4);
+        ctx.lineTo(centerX + 4, centerY - 4);
+        ctx.closePath();
+        ctx.fill();
+
+        // Pin inner circle (white dot)
+        ctx.fillStyle = "white";
+        ctx.beginPath();
+        ctx.arc(centerX, centerY - 6, 3, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Pin border
+        ctx.strokeStyle = "#d63031";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY - 6, 8, 0, 2 * Math.PI);
+        ctx.stroke();
 
         // Add map label
         ctx.fillStyle = "#4254D3";
@@ -459,7 +471,7 @@ class GeoCam {
         ctx.fillText("Location Map", mapX, labelY);
       } catch (error) {
         console.error("Map drawing error:", error);
-        // Ultra fallback - just show a location icon
+        // Ultra fallback - just show a location pin icon
         ctx.fillStyle = "#4254D3";
         ctx.font = `${textSize * 2}px Arial, sans-serif`;
         ctx.fillText("📍", width - 50, startY + height / 2);
@@ -477,47 +489,158 @@ class GeoCam {
 
   toggleVideo() {
     if (this.isRecording) {
-      // Stop recording
-      this.mediaRecorder.stop();
-      this.captureIcon.className = "fas fa-video";
-      this.captureBtn.classList.remove("recording");
-      this.updateStatus("Processing video...");
+      this.stopVideoRecording();
     } else {
-      // Start recording
+      this.startVideoRecording();
+    }
+  }
+
+  async startVideoRecording() {
+    try {
       if (!this.stream) {
         alert("Camera not available");
         return;
       }
 
-      const chunks = [];
-      const options = {
-        mimeType: "video/webm;codecs=vp9" || "video/webm" || "video/mp4",
-      };
+      this.updateStatus("Starting recording...");
 
-      try {
-        this.mediaRecorder = new MediaRecorder(this.stream, options);
-      } catch (error) {
-        this.mediaRecorder = new MediaRecorder(this.stream);
+      // Create recording canvas
+      this.recordingCanvas = document.createElement("canvas");
+      this.recordingContext = this.recordingCanvas.getContext("2d");
+
+      // Set canvas dimensions
+      this.recordingCanvas.width = this.video.videoWidth || 1920;
+      this.recordingCanvas.height =
+        this.video.videoHeight + this.getResponsiveFooterHeight() || 1080 + 140;
+
+      // Create MediaStream from canvas
+      const fps = 30;
+      const canvasStream = this.recordingCanvas.captureStream(fps);
+
+      // Add audio tracks if available
+      const audioTracks = this.stream.getAudioTracks();
+      audioTracks.forEach((track) => canvasStream.addTrack(track));
+
+      // Set up MediaRecorder
+      const chunks = [];
+      const mimeTypes = [
+        "video/webm;codecs=vp9,opus",
+        "video/webm;codecs=vp8,opus",
+        "video/webm",
+        "video/mp4",
+      ];
+
+      let selectedMimeType = "video/webm";
+      for (const mimeType of mimeTypes) {
+        if (MediaRecorder.isTypeSupported(mimeType)) {
+          selectedMimeType = mimeType;
+          break;
+        }
       }
 
-      this.mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunks.push(e.data);
+      this.mediaRecorder = new MediaRecorder(canvasStream, {
+        mimeType: selectedMimeType,
+        videoBitsPerSecond: 2500000,
+      });
+
+      this.mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunks.push(event.data);
+        }
       };
 
       this.mediaRecorder.onstop = () => {
-        const blob = new Blob(chunks, { type: "video/webm" });
+        const blob = new Blob(chunks, { type: selectedMimeType });
         const url = URL.createObjectURL(blob);
         this.showPreview(url);
         this.addToGallery("video", blob, url);
         this.updateStatus("Ready");
+
+        // Clean up
+        if (this.animationId) {
+          cancelAnimationFrame(this.animationId);
+          this.animationId = null;
+        }
       };
 
-      this.mediaRecorder.start();
+      this.mediaRecorder.onerror = (event) => {
+        console.error("MediaRecorder error:", event.error);
+        this.updateStatus("Recording failed");
+        this.isRecording = false;
+        this.captureIcon.className = "fas fa-video";
+        this.captureBtn.classList.remove("recording");
+      };
+
+      // Start recording
+      this.mediaRecorder.start(100); // Collect data every 100ms
+      this.isRecording = true;
       this.captureIcon.className = "fas fa-stop";
       this.captureBtn.classList.add("recording");
       this.updateStatus("Recording...");
+
+      // Start frame processing
+      this.processVideoFrame();
+    } catch (error) {
+      console.error("Video recording error:", error);
+      this.updateStatus("Recording failed");
+      alert("Failed to start video recording. Please try again.");
     }
-    this.isRecording = !this.isRecording;
+  }
+
+  processVideoFrame() {
+    if (!this.isRecording || !this.recordingCanvas || !this.recordingContext) {
+      return;
+    }
+
+    try {
+      // Clear canvas
+      this.recordingContext.clearRect(
+        0,
+        0,
+        this.recordingCanvas.width,
+        this.recordingCanvas.height
+      );
+
+      // Draw video frame
+      const videoHeight = this.video.videoHeight || 1080;
+      this.recordingContext.drawImage(
+        this.video,
+        0,
+        0,
+        this.recordingCanvas.width,
+        videoHeight
+      );
+
+      // Draw footer
+      const footerHeight = this.getResponsiveFooterHeight();
+      this.drawFooter(
+        this.recordingContext,
+        videoHeight,
+        this.recordingCanvas.width,
+        footerHeight
+      ).catch((err) => console.warn("Footer drawing error:", err));
+    } catch (error) {
+      console.warn("Frame processing error:", error);
+    }
+
+    // Schedule next frame
+    this.animationId = requestAnimationFrame(() => this.processVideoFrame());
+  }
+
+  stopVideoRecording() {
+    if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
+      this.mediaRecorder.stop();
+    }
+
+    this.isRecording = false;
+    this.captureIcon.className = "fas fa-video";
+    this.captureBtn.classList.remove("recording");
+    this.updateStatus("Processing video...");
+
+    if (this.animationId) {
+      cancelAnimationFrame(this.animationId);
+      this.animationId = null;
+    }
   }
 
   async toggleFlash() {
@@ -587,10 +710,19 @@ class GeoCam {
       type === "photo"
         ? document.createElement("img")
         : document.createElement("video");
+
     media.src = url;
     if (type === "video") {
       media.controls = true;
       media.muted = true;
+      media.preload = "metadata";
+      // Ensure video is playable
+      media.addEventListener("loadedmetadata", () => {
+        console.log("Video loaded:", media.duration, "seconds");
+      });
+      media.addEventListener("error", (e) => {
+        console.error("Video error:", e);
+      });
     }
     media.loading = "lazy";
     item.appendChild(media);
@@ -636,7 +768,7 @@ class GeoCam {
     actions.appendChild(deleteBtn);
 
     // Share button (if supported)
-    if (navigator.share && type === "photo") {
+    if (navigator.share) {
       const shareBtn = document.createElement("button");
       shareBtn.className = "btn btn-sm";
       shareBtn.innerHTML = '<i class="fas fa-share-alt"></i>';
@@ -644,12 +776,17 @@ class GeoCam {
       shareBtn.onclick = async (e) => {
         e.stopPropagation();
         try {
-          const file = new File([blob], `GeoCam_${type}_${Date.now()}.jpg`, {
-            type: blob.type,
-          });
+          const fileExtension = type === "photo" ? "jpg" : "webm";
+          const file = new File(
+            [blob],
+            `GeoCam_${type}_${Date.now()}.${fileExtension}`,
+            {
+              type: blob.type,
+            }
+          );
           await navigator.share({
-            title: "GeoCam Photo",
-            text: "Check out my GeoCam photo with location data!",
+            title: `GeoCam ${type}`,
+            text: `Check out my GeoCam ${type} with location data!`,
             files: [file],
           });
         } catch (error) {
@@ -665,17 +802,25 @@ class GeoCam {
     media.onclick = () => {
       const modal = document.createElement("div");
       modal.style.cssText = `
-                        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-                        background: rgba(0,0,0,0.9); z-index: 9999; display: flex;
-                        align-items: center; justify-content: center; cursor: pointer;
-                    `;
+        position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+        background: rgba(0,0,0,0.9); z-index: 9999; display: flex;
+        align-items: center; justify-content: center; cursor: pointer;
+      `;
 
       const fullMedia = media.cloneNode(true);
       fullMedia.style.cssText =
         "max-width: 90%; max-height: 90%; object-fit: contain;";
+      if (type === "video") {
+        fullMedia.controls = true;
+        fullMedia.autoplay = true;
+      }
       modal.appendChild(fullMedia);
 
-      modal.onclick = () => document.body.removeChild(modal);
+      modal.onclick = (e) => {
+        if (e.target === modal) {
+          document.body.removeChild(modal);
+        }
+      };
       document.body.appendChild(modal);
     };
 
@@ -688,19 +833,35 @@ class GeoCam {
       url,
       timestamp: new Date(),
     });
+
+    console.log(`${type} added to gallery:`, {
+      size: blob.size,
+      type: blob.type,
+    });
   }
 
   // Cleanup method
   destroy() {
+    if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
+      this.mediaRecorder.stop();
+    }
+
+    if (this.animationId) {
+      cancelAnimationFrame(this.animationId);
+    }
+
     if (this.stream) {
       this.stream.getTracks().forEach((track) => track.stop());
     }
+
     if (this.clockInterval) {
       clearInterval(this.clockInterval);
     }
+
     if (this.map) {
       this.map.remove();
     }
+
     // Revoke all blob URLs
     this.capturedMedia.forEach((media) => {
       URL.revokeObjectURL(media.url);
@@ -721,10 +882,9 @@ window.addEventListener("beforeunload", () => {
   }
 });
 
-// Handle visibility change (pause/resume camera)
+// Handle visibility change
 document.addEventListener("visibilitychange", () => {
   if (app && app.isRecording && document.hidden) {
-    // Optionally pause recording when tab is not visible
     console.log("Tab hidden during recording");
   }
 });
