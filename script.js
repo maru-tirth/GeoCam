@@ -12,7 +12,8 @@ class GeoCam {
     this.loadingSpinner = document.getElementById("loadingSpinner");
     this.photoModeBtn = document.getElementById("photoModeBtn");
     this.videoModeBtn = document.getElementById("videoModeBtn");
-
+    this.cachedMapCanvas = null;
+    this.lastMapCacheKey = null;
     this.stream = null;
     this.isRecording = false;
     this.mediaRecorder = null;
@@ -265,6 +266,10 @@ class GeoCam {
     return 140; // Desktop
   }
 
+  // Add these properties to your class constructor:
+  // this.cachedMapCanvas = null;
+  // this.lastMapCacheKey = null;
+
   async drawFooter(ctx, startY, width, height) {
     // Footer background - solid dark color like GPS Map Camera
     ctx.fillStyle = "rgba(0, 0, 0, 0.54)";
@@ -296,10 +301,10 @@ class GeoCam {
     const textSize = Math.max(11, Math.min(15, width / 80));
     const smallTextSize = Math.max(9, Math.min(13, width / 90));
 
-    // Draw map section with caching for video mode
+    // Draw map section with improved loading
     if (this.currentPosition) {
       try {
-        const zoom = 16;
+        const zoom = 15; // Reduced zoom for better loading
 
         // Create cache key for map
         const mapCacheKey = `${lat}_${lng}_${zoom}_${mapWidth}_${mapHeight}`;
@@ -319,125 +324,188 @@ class GeoCam {
           mapCanvas.height = mapHeight;
           const mapCtx = mapCanvas.getContext("2d");
 
-          // Improved tile calculation for precise positioning
-          const latRad = (this.currentPosition.latitude * Math.PI) / 180;
-          const n = Math.pow(2, zoom);
-
-          // Calculate tile coordinates more precisely
-          const tileX = ((this.currentPosition.longitude + 180) / 360) * n;
-          const tileY = ((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2) * n;
-
-          // Get the tile indices
-          const tileXInt = Math.floor(tileX);
-          const tileYInt = Math.floor(tileY);
-
-          // Calculate pixel offset within the tile
-          const pixelOffsetX = (tileX - tileXInt) * 256;
-          const pixelOffsetY = (tileY - tileYInt) * 256;
-
-          // Calculate how many tiles we need to cover the map area
-          const tilesX = Math.ceil(mapWidth / 256) + 1;
-          const tilesY = Math.ceil(mapHeight / 256) + 1;
-
-          // Calculate starting tile position to center the location
-          const startTileX = tileXInt - Math.floor(tilesX / 2);
-          const startTileY = tileYInt - Math.floor(tilesY / 2);
+          // Clear with background color
+          mapCtx.fillStyle = "#e6f3ff";
+          mapCtx.fillRect(0, 0, mapWidth, mapHeight);
 
           try {
-            // Load map tiles with better positioning
-            const tilePromises = [];
+            // Simplified tile calculation
+            const userLat = this.currentPosition.latitude;
+            const userLng = this.currentPosition.longitude;
 
-            for (let dx = 0; dx < tilesX; dx++) {
-              for (let dy = 0; dy < tilesY; dy++) {
-                const tileXPos = startTileX + dx;
-                const tileYPos = startTileY + dy;
+            // Convert lat/lng to tile coordinates
+            const tileSize = 256;
+            const scale = Math.pow(2, zoom);
 
-                // Skip invalid tile coordinates
+            // Calculate tile coordinates for user location
+            const userTileX = Math.floor(((userLng + 180) / 360) * scale);
+            const userTileY = Math.floor(
+              ((1 -
+                Math.log(
+                  Math.tan((userLat * Math.PI) / 180) +
+                    1 / Math.cos((userLat * Math.PI) / 180)
+                ) /
+                  Math.PI) /
+                2) *
+                scale
+            );
+
+            // Calculate pixel position within the tile
+            const userPixelX =
+              (((userLng + 180) / 360) * scale - userTileX) * tileSize;
+            const userPixelY =
+              (((1 -
+                Math.log(
+                  Math.tan((userLat * Math.PI) / 180) +
+                    1 / Math.cos((userLat * Math.PI) / 180)
+                ) /
+                  Math.PI) /
+                2) *
+                scale -
+                userTileY) *
+              tileSize;
+
+            // Calculate which tiles we need (3x3 grid centered on user)
+            const tilesToLoad = [];
+            for (let dx = -1; dx <= 1; dx++) {
+              for (let dy = -1; dy <= 1; dy++) {
+                const tileX = userTileX + dx;
+                const tileY = userTileY + dy;
+
+                // Check if tile coordinates are valid
                 if (
-                  tileXPos < 0 ||
-                  tileYPos < 0 ||
-                  tileXPos >= n ||
-                  tileYPos >= n
+                  tileX >= 0 &&
+                  tileY >= 0 &&
+                  tileX < scale &&
+                  tileY < scale
                 ) {
-                  continue;
+                  tilesToLoad.push({
+                    x: tileX,
+                    y: tileY,
+                    dx: dx,
+                    dy: dy,
+                  });
                 }
-
-                const tileUrl = `https://tile.openstreetmap.org/${zoom}/${tileXPos}/${tileYPos}.png`;
-
-                tilePromises.push(
-                  new Promise((resolve) => {
-                    const img = new Image();
-                    img.crossOrigin = "anonymous";
-                    img.onload = () => resolve({ img, dx, dy });
-                    img.onerror = () => resolve(null);
-                    img.src = tileUrl;
-                    setTimeout(() => resolve(null), 1500);
-                  })
-                );
               }
             }
 
-            const tiles = await Promise.all(tilePromises);
-            let tilesLoaded = false;
+            // Load tiles with timeout and error handling
+            const tilePromises = tilesToLoad.map((tile) => {
+              return new Promise((resolve) => {
+                const img = new Image();
+                img.crossOrigin = "anonymous";
 
-            // Clear map canvas
-            mapCtx.fillStyle = "#f0f0f0";
-            mapCtx.fillRect(0, 0, mapWidth, mapHeight);
+                const timeout = setTimeout(() => {
+                  img.onload = null;
+                  img.onerror = null;
+                  resolve(null);
+                }, 2000); // 2 second timeout
 
-            tiles.forEach((tile) => {
-              if (tile && tile.img) {
-                // Calculate position to center the user's location
-                const centerOffsetX = mapWidth / 2 - pixelOffsetX;
-                const centerOffsetY = mapHeight / 2 - pixelOffsetY;
+                img.onload = () => {
+                  clearTimeout(timeout);
+                  resolve({
+                    img: img,
+                    tileInfo: tile,
+                  });
+                };
 
-                const x =
-                  tile.dx * 256 + centerOffsetX - Math.floor(tilesX / 2) * 256;
-                const y =
-                  tile.dy * 256 + centerOffsetY - Math.floor(tilesY / 2) * 256;
+                img.onerror = () => {
+                  clearTimeout(timeout);
+                  resolve(null);
+                };
 
-                mapCtx.drawImage(tile.img, x, y, 256, 256);
-                tilesLoaded = true;
-              }
+                // Use different tile servers for better reliability
+                const servers = ["a", "b", "c"];
+                const server =
+                  servers[Math.abs(tile.x + tile.y) % servers.length];
+                img.src = `https://${server}.tile.openstreetmap.org/${zoom}/${tile.x}/${tile.y}.png`;
+              });
             });
 
-            if (tilesLoaded) {
-              // Cache the map canvas for video mode to prevent flickering
-              if (this.isRecording) {
-                this.cachedMapCanvas = document.createElement("canvas");
-                this.cachedMapCanvas.width = mapWidth;
-                this.cachedMapCanvas.height = mapHeight;
-                const cacheCtx = this.cachedMapCanvas.getContext("2d");
-                cacheCtx.drawImage(mapCanvas, 0, 0);
-                this.lastMapCacheKey = mapCacheKey;
-              }
+            // Wait for all tiles to load (or timeout)
+            const loadedTiles = await Promise.all(tilePromises);
+            const validTiles = loadedTiles.filter((tile) => tile !== null);
 
-              ctx.drawImage(mapCanvas, mapX, mapY, mapWidth, mapHeight);
+            if (validTiles.length > 0) {
+              // Calculate center position for map
+              const centerX = mapWidth / 2;
+              const centerY = mapHeight / 2;
+
+              // Draw loaded tiles
+              validTiles.forEach(({ img, tileInfo }) => {
+                // Calculate where to draw this tile
+                const drawX = centerX + tileInfo.dx * tileSize - userPixelX;
+                const drawY = centerY + tileInfo.dy * tileSize - userPixelY;
+
+                // Only draw if tile is visible in our canvas
+                if (
+                  drawX + tileSize > 0 &&
+                  drawY + tileSize > 0 &&
+                  drawX < mapWidth &&
+                  drawY < mapHeight
+                ) {
+                  mapCtx.drawImage(img, drawX, drawY, tileSize, tileSize);
+                }
+              });
+
+              console.log(
+                `Loaded ${validTiles.length}/${tilesToLoad.length} map tiles`
+              );
             } else {
-              throw new Error("No tiles loaded");
+              throw new Error("No tiles loaded successfully");
             }
+
+            // Cache the map canvas for video mode to prevent flickering
+            if (this.isRecording) {
+              this.cachedMapCanvas = document.createElement("canvas");
+              this.cachedMapCanvas.width = mapWidth;
+              this.cachedMapCanvas.height = mapHeight;
+              const cacheCtx = this.cachedMapCanvas.getContext("2d");
+              cacheCtx.drawImage(mapCanvas, 0, 0);
+              this.lastMapCacheKey = mapCacheKey;
+            }
+
+            ctx.drawImage(mapCanvas, mapX, mapY, mapWidth, mapHeight);
           } catch (tileError) {
-            console.warn("Tile loading error:", tileError);
-            // Fallback map design
+            console.warn("Tile loading failed, using fallback:", tileError);
+
+            // Enhanced fallback map design
             const mapGradient = mapCtx.createLinearGradient(0, 0, 0, mapHeight);
-            mapGradient.addColorStop(0, "#4a5568");
-            mapGradient.addColorStop(0.5, "#2d3748");
-            mapGradient.addColorStop(1, "#1a202c");
+            mapGradient.addColorStop(0, "#87CEEB"); // Sky blue
+            mapGradient.addColorStop(0.3, "#4682B4"); // Steel blue
+            mapGradient.addColorStop(0.7, "#2F4F4F"); // Dark slate gray
+            mapGradient.addColorStop(1, "#191970"); // Midnight blue
 
             mapCtx.fillStyle = mapGradient;
             mapCtx.fillRect(0, 0, mapWidth, mapHeight);
 
-            // Add grid pattern
-            mapCtx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+            // Add decorative elements to make it look more map-like
+            mapCtx.strokeStyle = "rgba(255, 255, 255, 0.2)";
             mapCtx.lineWidth = 1;
+
+            // Draw grid pattern
+            const gridSize = Math.min(mapWidth, mapHeight) / 8;
             mapCtx.beginPath();
-            for (let i = 0; i <= 4; i++) {
-              const x = (mapWidth / 4) * i;
-              const y = (mapHeight / 4) * i;
+            for (let i = 0; i <= 8; i++) {
+              const x = (mapWidth / 8) * i;
+              const y = (mapHeight / 8) * i;
               mapCtx.moveTo(x, 0);
               mapCtx.lineTo(x, mapHeight);
               mapCtx.moveTo(0, y);
               mapCtx.lineTo(mapWidth, y);
             }
+            mapCtx.stroke();
+
+            // Add some "road" lines
+            mapCtx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+            mapCtx.lineWidth = 2;
+            mapCtx.beginPath();
+            // Horizontal "road"
+            mapCtx.moveTo(0, mapHeight * 0.6);
+            mapCtx.lineTo(mapWidth, mapHeight * 0.4);
+            // Vertical "road"
+            mapCtx.moveTo(mapWidth * 0.3, 0);
+            mapCtx.lineTo(mapWidth * 0.7, mapHeight);
             mapCtx.stroke();
 
             // Cache fallback map for video mode
@@ -457,57 +525,65 @@ class GeoCam {
         // Draw red location pin (always at center)
         const pinX = mapX + mapWidth / 2;
         const pinY = mapY + mapHeight / 2;
-        const pinSize = Math.min(mapWidth, mapHeight) * 0.15;
+        const pinSize = Math.min(mapWidth, mapHeight) * 0.12;
 
         // Pin shadow
-        ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
+        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
         ctx.beginPath();
         ctx.ellipse(
-          pinX + 1,
-          pinY + pinSize * 0.7,
-          pinSize * 0.3,
-          pinSize * 0.15,
+          pinX + 2,
+          pinY + pinSize * 0.8,
+          pinSize * 0.4,
+          pinSize * 0.2,
           0,
           0,
           2 * Math.PI
         );
         ctx.fill();
 
-        // Pin body
-        ctx.fillStyle = "#E53E3E";
+        // Pin body (larger and more visible)
+        ctx.fillStyle = "#FF4444";
         ctx.beginPath();
-        ctx.arc(pinX, pinY, pinSize * 0.5, 0, 2 * Math.PI);
+        ctx.arc(pinX, pinY, pinSize * 0.6, 0, 2 * Math.PI);
         ctx.fill();
 
         // Pin tip
         ctx.beginPath();
-        ctx.moveTo(pinX, pinY + pinSize * 0.8);
-        ctx.lineTo(pinX - pinSize * 0.25, pinY + pinSize * 0.1);
-        ctx.lineTo(pinX + pinSize * 0.25, pinY + pinSize * 0.1);
+        ctx.moveTo(pinX, pinY + pinSize * 0.9);
+        ctx.lineTo(pinX - pinSize * 0.3, pinY + pinSize * 0.1);
+        ctx.lineTo(pinX + pinSize * 0.3, pinY + pinSize * 0.1);
         ctx.closePath();
         ctx.fill();
 
         // White center dot
         ctx.fillStyle = "white";
         ctx.beginPath();
-        ctx.arc(pinX, pinY, pinSize * 0.2, 0, 2 * Math.PI);
+        ctx.arc(pinX, pinY, pinSize * 0.25, 0, 2 * Math.PI);
+        ctx.fill();
+
+        // Inner red dot
+        ctx.fillStyle = "#FF4444";
+        ctx.beginPath();
+        ctx.arc(pinX, pinY, pinSize * 0.1, 0, 2 * Math.PI);
         ctx.fill();
       } catch (error) {
         console.error("Map drawing error:", error);
-        // Ultra fallback
-        ctx.fillStyle = "#2d3748";
+        // Ultra fallback - simple colored rectangle with pin
+        ctx.fillStyle = "#4A90E2";
         ctx.fillRect(mapX, mapY, mapWidth, mapHeight);
-        ctx.fillStyle = "#E53E3E";
-        ctx.font = `${mapHeight * 0.4}px Arial`;
+
+        // Simple pin emoji as last resort
+        ctx.fillStyle = "#FF4444";
+        ctx.font = `${mapHeight * 0.3}px Arial`;
         ctx.textAlign = "center";
-        ctx.fillText("📍", mapX + mapWidth / 2, mapY + mapHeight * 0.7);
+        ctx.fillText("📍", mapX + mapWidth / 2, mapY + mapHeight * 0.6);
         ctx.textAlign = "left";
       }
     }
 
     // Draw border around map
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
-    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.5)";
+    ctx.lineWidth = 2;
     ctx.strokeRect(mapX, mapY, mapWidth, mapHeight);
 
     // Text information section
@@ -594,11 +670,15 @@ class GeoCam {
     const dateTimeStr = `${dateStr} ${timeStr} GMT +05:30`;
     ctx.fillText(dateTimeStr, textStartX, currentY);
 
-    // Add Google-style watermark
+    // Add watermark
     ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
     ctx.font = `bold ${smallTextSize * 0.8}px Arial, sans-serif`;
-    ctx.fillText("Pixaloc", mapX + 4, mapY + mapHeight - 4);
+    ctx.fillText("Pixaloc", mapX + 4, mapY + mapHeight - 6);
   }
+
+  // Also add this to your stopVideoRecording method to clear cache:
+  // this.cachedMapCanvas = null;
+  // this.lastMapCacheKey = null;
 
   toggleVideo() {
     if (this.isRecording) {
@@ -744,7 +824,8 @@ class GeoCam {
     if (this.mediaRecorder && this.mediaRecorder.state !== "inactive") {
       this.mediaRecorder.stop();
     }
-
+    this.cachedMapCanvas = null;
+    this.lastMapCacheKey = null;
     this.isRecording = false;
     this.captureIcon.className = "fas fa-video";
     this.captureBtn.classList.remove("recording");
