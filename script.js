@@ -266,61 +266,39 @@ class GeoCam {
   }
 
   async drawFooter(ctx, startY, width, height) {
-    // Footer background with gradient
-    const gradient = ctx.createLinearGradient(0, startY, 0, startY + height);
-    gradient.addColorStop(0, "rgba(0, 0, 0, 0.9)");
-    gradient.addColorStop(1, "rgba(20, 20, 30, 0.95)");
-    ctx.fillStyle = gradient;
+    // Footer background - solid dark color like GPS Map Camera
+    ctx.fillStyle = "rgba(0, 0, 0, 0.54)";
     ctx.fillRect(0, startY, width, height);
 
     const now = new Date();
     const dateStr = now.toLocaleDateString("en-IN");
-    const timeStr = now.toLocaleTimeString("en-IN");
-    const lat = this.currentPosition?.latitude?.toFixed(6) || "N/A";
-    const lng = this.currentPosition?.longitude?.toFixed(6) || "N/A";
+    const timeStr = now.toLocaleTimeString("en-IN", {
+      hour12: true,
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    const lat = this.currentPosition?.latitude?.toFixed(5) || "N/A";
+    const lng = this.currentPosition?.longitude?.toFixed(5) || "N/A";
 
     let addressStr = this.currentAddress || "Address not available";
-    const maxAddressLength = width < 800 ? 40 : width < 1200 ? 55 : 70;
-    if (addressStr.length > maxAddressLength) {
-      addressStr = addressStr.substring(0, maxAddressLength - 3) + "...";
-    }
+
+    // Responsive measurements
+    const mapWidth = Math.min(height * 1.2, width * 0.25, 150);
+    const mapHeight = height * 0.7;
+    const mapX = width * 0.02;
+    const mapY = startY + height * 0.15;
+
+    const textStartX = mapX + mapWidth + width * 0.03;
+    const textAreaWidth = width - textStartX - width * 0.02;
 
     // Responsive font sizes
-    const titleSize = Math.max(12, Math.min(18, width / 50));
-    const textSize = Math.max(10, Math.min(14, width / 80));
-    const smallTextSize = Math.max(8, Math.min(12, width / 100));
+    const titleSize = Math.max(14, Math.min(20, width / 60));
+    const textSize = Math.max(11, Math.min(15, width / 80));
+    const smallTextSize = Math.max(9, Math.min(13, width / 90));
 
-    // Left side - Text info
-    const leftMargin = width * 0.02;
-    const textStartY = startY + height * 0.2;
-
-    // GeoCam title
-    ctx.fillStyle = "#B8BFE6";
-    ctx.font = `bold ${titleSize}px Poppins, Arial, sans-serif`;
-    ctx.fillText("Pixaloc", leftMargin, textStartY);
-
-    // Date and time
-    ctx.fillStyle = "white";
-    ctx.font = `${textSize}px Poppins, Arial, sans-serif`;
-    const line2Y = textStartY + height * 0.25;
-    ctx.fillText(`📅 ${dateStr} | ⏰ ${timeStr}`, leftMargin, line2Y);
-
-    // Coordinates
-    const line3Y = line2Y + height * 0.25;
-    ctx.fillText(`📍 ${lat}, ${lng}`, leftMargin, line3Y);
-
-    // Address
-    const line4Y = line3Y + height * 0.25;
-    ctx.fillText(`🏠 ${addressStr}`, leftMargin, line4Y);
-
-    // Right side - Map
+    // Draw map section first
     if (this.currentPosition) {
       try {
-        const mapSize = Math.min(height * 0.8, width * 0.15, 120);
-        const mapX = width - mapSize - width * 0.02;
-        const mapY = startY + height * 0.1;
-
-        // Get map tile URL for the current location
         const zoom = 16;
         const tileX = Math.floor(
           ((this.currentPosition.longitude + 180) / 360) * Math.pow(2, zoom)
@@ -336,17 +314,17 @@ class GeoCam {
             Math.pow(2, zoom)
         );
 
-        // Create multiple tile requests for better coverage
         const mapCanvas = document.createElement("canvas");
-        mapCanvas.width = mapSize;
-        mapCanvas.height = mapSize;
+        mapCanvas.width = mapWidth;
+        mapCanvas.height = mapHeight;
         const mapCtx = mapCanvas.getContext("2d");
 
         try {
-          // Try to load actual map tiles
+          // Try to load map tiles
           const tilePromises = [];
           const tileSize = 256;
-          const tilesNeeded = Math.ceil(mapSize / tileSize) + 1;
+          const tilesNeeded =
+            Math.ceil(Math.max(mapWidth, mapHeight) / tileSize) + 1;
 
           for (let dx = -1; dx < tilesNeeded; dx++) {
             for (let dy = -1; dy < tilesNeeded; dy++) {
@@ -361,7 +339,7 @@ class GeoCam {
                   img.onload = () => resolve({ img, dx, dy });
                   img.onerror = () => resolve(null);
                   img.src = tileUrl;
-                  setTimeout(() => resolve(null), 1000); // Timeout after 1 second
+                  setTimeout(() => resolve(null), 1500);
                 })
               );
             }
@@ -372,119 +350,192 @@ class GeoCam {
 
           tiles.forEach((tile) => {
             if (tile && tile.img) {
-              const x = tile.dx * tileSize;
-              const y = tile.dy * tileSize;
+              const x = tile.dx * tileSize - tileSize / 2;
+              const y = tile.dy * tileSize - tileSize / 2;
               mapCtx.drawImage(tile.img, x, y, tileSize, tileSize);
               tilesLoaded = true;
             }
           });
 
           if (tilesLoaded) {
-            // Draw the map
-            ctx.drawImage(mapCanvas, mapX, mapY, mapSize, mapSize);
+            ctx.drawImage(mapCanvas, mapX, mapY, mapWidth, mapHeight);
           } else {
             throw new Error("No tiles loaded");
           }
         } catch (tileError) {
-          console.log("Using fallback map design");
-          // Fallback: Draw a stylized map background
-          const mapGradient = ctx.createRadialGradient(
-            mapX + mapSize / 2,
-            mapY + mapSize / 2,
-            0,
-            mapX + mapSize / 2,
-            mapY + mapSize / 2,
-            mapSize / 2
+          // Fallback map design
+          const mapGradient = ctx.createLinearGradient(
+            mapX,
+            mapY,
+            mapX,
+            mapY + mapHeight
           );
-          mapGradient.addColorStop(0, "#E8F4FD");
-          mapGradient.addColorStop(0.7, "#B3D9FF");
-          mapGradient.addColorStop(1, "#7CB3E8");
+          mapGradient.addColorStop(0, "#4a5568");
+          mapGradient.addColorStop(0.5, "#2d3748");
+          mapGradient.addColorStop(1, "#1a202c");
 
           ctx.fillStyle = mapGradient;
-          ctx.fillRect(mapX, mapY, mapSize, mapSize);
+          ctx.fillRect(mapX, mapY, mapWidth, mapHeight);
 
-          // Add some "street" lines
-          ctx.strokeStyle = "rgba(255, 255, 255, 0.8)";
-          ctx.lineWidth = 2;
+          // Add grid pattern
+          ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+          ctx.lineWidth = 1;
           ctx.beginPath();
-          // Horizontal lines
-          for (let i = 0; i < 4; i++) {
-            const y = mapY + (mapSize / 4) * (i + 0.5);
-            ctx.moveTo(mapX, y);
-            ctx.lineTo(mapX + mapSize, y);
-          }
-          // Vertical lines
-          for (let i = 0; i < 4; i++) {
-            const x = mapX + (mapSize / 4) * (i + 0.5);
+          for (let i = 0; i <= 4; i++) {
+            const x = mapX + (mapWidth / 4) * i;
+            const y = mapY + (mapHeight / 4) * i;
             ctx.moveTo(x, mapY);
-            ctx.lineTo(x, mapY + mapSize);
+            ctx.lineTo(x, mapY + mapHeight);
+            ctx.moveTo(mapX, y);
+            ctx.lineTo(mapX + mapWidth, y);
           }
           ctx.stroke();
         }
 
-        // Draw border around map
-        ctx.strokeStyle = "#4254D3";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(mapX, mapY, mapSize, mapSize);
-
-        // Draw location pin marker
-        const centerX = mapX + mapSize / 2;
-        const centerY = mapY + mapSize / 2;
+        // Draw red location pin
+        const pinX = mapX + mapWidth / 2;
+        const pinY = mapY + mapHeight / 2;
+        const pinSize = Math.min(mapWidth, mapHeight) * 0.15;
 
         // Pin shadow
-        ctx.fillStyle = "rgba(0, 0, 0, 0.3)";
+        ctx.fillStyle = "rgba(0, 0, 0, 0.4)";
         ctx.beginPath();
-        ctx.ellipse(centerX + 1, centerY + 8, 4, 2, 0, 0, 2 * Math.PI);
+        ctx.ellipse(
+          pinX + 1,
+          pinY + pinSize * 0.7,
+          pinSize * 0.3,
+          pinSize * 0.15,
+          0,
+          0,
+          2 * Math.PI
+        );
         ctx.fill();
 
-        // Pin body (teardrop shape)
-        ctx.fillStyle = "#ff4757";
+        // Pin body
+        ctx.fillStyle = "#E53E3E";
         ctx.beginPath();
-        ctx.arc(centerX, centerY - 6, 8, 0, 2 * Math.PI);
+        ctx.arc(pinX, pinY, pinSize * 0.5, 0, 2 * Math.PI);
         ctx.fill();
 
         // Pin tip
         ctx.beginPath();
-        ctx.moveTo(centerX, centerY + 2);
-        ctx.lineTo(centerX - 4, centerY - 4);
-        ctx.lineTo(centerX + 4, centerY - 4);
+        ctx.moveTo(pinX, pinY + pinSize * 0.8);
+        ctx.lineTo(pinX - pinSize * 0.25, pinY + pinSize * 0.1);
+        ctx.lineTo(pinX + pinSize * 0.25, pinY + pinSize * 0.1);
         ctx.closePath();
         ctx.fill();
 
-        // Pin inner circle (white dot)
+        // White center dot
         ctx.fillStyle = "white";
         ctx.beginPath();
-        ctx.arc(centerX, centerY - 6, 3, 0, 2 * Math.PI);
+        ctx.arc(pinX, pinY, pinSize * 0.2, 0, 2 * Math.PI);
         ctx.fill();
-
-        // Pin border
-        ctx.strokeStyle = "#d63031";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.arc(centerX, centerY - 6, 8, 0, 2 * Math.PI);
-        ctx.stroke();
-
-        // Add map label
-        ctx.fillStyle = "#4254D3";
-        ctx.font = `bold ${smallTextSize}px Poppins, Arial, sans-serif`;
-        const labelY = mapY - 8;
-        ctx.fillText("Location Map", mapX, labelY);
       } catch (error) {
         console.error("Map drawing error:", error);
-        // Ultra fallback - just show a location pin icon
-        ctx.fillStyle = "#4254D3";
-        ctx.font = `${textSize * 2}px Arial, sans-serif`;
-        ctx.fillText("📍", width - 50, startY + height / 2);
+        // Ultra fallback
+        ctx.fillStyle = "#2d3748";
+        ctx.fillRect(mapX, mapY, mapWidth, mapHeight);
+        ctx.fillStyle = "#E53E3E";
+        ctx.font = `${mapHeight * 0.4}px Arial`;
+        ctx.textAlign = "center";
+        ctx.fillText("📍", mapX + mapWidth / 2, mapY + mapHeight * 0.7);
+        ctx.textAlign = "left";
       }
     }
 
-    // Add a subtle top border to the footer
-    ctx.strokeStyle = "rgba(178, 191, 230, 0.5)";
+    // Draw border around map
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.3)";
     ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, startY);
-    ctx.lineTo(width, startY);
-    ctx.stroke();
+    ctx.strokeRect(mapX, mapY, mapWidth, mapHeight);
+
+    // Text information section
+    const lineHeight = height * 0.18;
+    let currentY = startY + height * 0.15;
+
+    // Location title (like GPS Map Camera)
+    ctx.fillStyle = "white";
+    ctx.font = `bold ${titleSize}px Arial, sans-serif`;
+
+    // Get city/area from address for title
+    let locationTitle = "Unknown Location";
+    if (this.currentAddress) {
+      const parts = this.currentAddress.split(",");
+      // Try to extract city, state, country
+      if (parts.length >= 3) {
+        const city = parts[parts.length - 4] || parts[0];
+        const state = parts[parts.length - 2];
+        const country = parts[parts.length - 1];
+        locationTitle = `${city?.trim()}, ${state?.trim()}, ${country?.trim()}`;
+      } else {
+        locationTitle = parts[0]?.trim() || "Unknown Location";
+      }
+    }
+
+    // Truncate title if too long
+    const maxTitleWidth = textAreaWidth;
+    let truncatedTitle = locationTitle;
+    ctx.measureText = ctx.measureText || (() => ({ width: 0 }));
+    while (
+      ctx.measureText(truncatedTitle).width > maxTitleWidth &&
+      truncatedTitle.length > 10
+    ) {
+      truncatedTitle =
+        truncatedTitle.substring(0, truncatedTitle.length - 4) + "...";
+    }
+
+    ctx.fillText(truncatedTitle, textStartX, currentY);
+    currentY += lineHeight;
+
+    // Full address
+    ctx.fillStyle = "rgba(255, 255, 255, 0.9)";
+    ctx.font = `${smallTextSize}px Arial, sans-serif`;
+
+    // Wrap address text
+    const maxAddressWidth = textAreaWidth;
+    const words = addressStr.split(" ");
+    let line = "";
+    let addressLines = [];
+
+    for (let i = 0; i < words.length; i++) {
+      const testLine = line + words[i] + " ";
+      if (ctx.measureText(testLine).width > maxAddressWidth && line !== "") {
+        addressLines.push(line.trim());
+        line = words[i] + " ";
+      } else {
+        line = testLine;
+      }
+    }
+    if (line.trim()) {
+      addressLines.push(line.trim());
+    }
+
+    // Limit to 2 lines
+    if (addressLines.length > 2) {
+      addressLines = addressLines.slice(0, 2);
+      addressLines[1] =
+        addressLines[1].substring(0, addressLines[1].length - 3) + "...";
+    }
+
+    addressLines.forEach((line) => {
+      ctx.fillText(line, textStartX, currentY);
+      currentY += lineHeight * 0.8;
+    });
+
+    // Coordinates
+    currentY += lineHeight * 0.3;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.8)";
+    ctx.font = `${smallTextSize}px Arial, sans-serif`;
+    ctx.fillText(`Lat ${lat}° Long ${lng}°`, textStartX, currentY);
+
+    // Date and time
+    currentY += lineHeight * 0.8;
+    const dateTimeStr = `${dateStr} ${timeStr} GMT +05:30`;
+    ctx.fillText(dateTimeStr, textStartX, currentY);
+
+    // Add Google-style watermark
+    ctx.fillStyle = "rgba(255, 255, 255, 0.7)";
+    ctx.font = `bold ${smallTextSize * 0.8}px Arial, sans-serif`;
+    ctx.fillText("Pixaloc", mapX + 4, mapY + mapHeight - 4);
   }
 
   toggleVideo() {
