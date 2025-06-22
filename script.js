@@ -297,7 +297,7 @@ class GeoCam {
     // GeoCam title
     ctx.fillStyle = "#B8BFE6";
     ctx.font = `bold ${titleSize}px Poppins, Arial, sans-serif`;
-    ctx.fillText("GeoCam", leftMargin, textStartY);
+    ctx.fillText("Pixaloc", leftMargin, textStartY);
 
     // Date and time
     ctx.fillStyle = "white";
