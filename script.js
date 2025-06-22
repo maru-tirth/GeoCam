@@ -296,103 +296,165 @@ class GeoCam {
     const textSize = Math.max(11, Math.min(15, width / 80));
     const smallTextSize = Math.max(9, Math.min(13, width / 90));
 
-    // Draw map section first
+    // Draw map section with caching for video mode
     if (this.currentPosition) {
       try {
         const zoom = 16;
-        const tileX = Math.floor(
-          ((this.currentPosition.longitude + 180) / 360) * Math.pow(2, zoom)
-        );
-        const tileY = Math.floor(
-          ((1 -
-            Math.log(
-              Math.tan((this.currentPosition.latitude * Math.PI) / 180) +
-                1 / Math.cos((this.currentPosition.latitude * Math.PI) / 180)
-            ) /
-              Math.PI) /
-            2) *
-            Math.pow(2, zoom)
-        );
 
-        const mapCanvas = document.createElement("canvas");
-        mapCanvas.width = mapWidth;
-        mapCanvas.height = mapHeight;
-        const mapCtx = mapCanvas.getContext("2d");
+        // Create cache key for map
+        const mapCacheKey = `${lat}_${lng}_${zoom}_${mapWidth}_${mapHeight}`;
 
-        try {
-          // Try to load map tiles
-          const tilePromises = [];
-          const tileSize = 256;
-          const tilesNeeded =
-            Math.ceil(Math.max(mapWidth, mapHeight) / tileSize) + 1;
+        // Check if we have cached map canvas for video mode
+        if (
+          this.isRecording &&
+          this.cachedMapCanvas &&
+          this.lastMapCacheKey === mapCacheKey
+        ) {
+          // Use cached map to prevent flickering
+          ctx.drawImage(this.cachedMapCanvas, mapX, mapY, mapWidth, mapHeight);
+        } else {
+          // Create new map
+          const mapCanvas = document.createElement("canvas");
+          mapCanvas.width = mapWidth;
+          mapCanvas.height = mapHeight;
+          const mapCtx = mapCanvas.getContext("2d");
 
-          for (let dx = -1; dx < tilesNeeded; dx++) {
-            for (let dy = -1; dy < tilesNeeded; dy++) {
-              const tileXPos = tileX + dx;
-              const tileYPos = tileY + dy;
-              const tileUrl = `https://tile.openstreetmap.org/${zoom}/${tileXPos}/${tileYPos}.png`;
+          // Improved tile calculation for precise positioning
+          const latRad = (this.currentPosition.latitude * Math.PI) / 180;
+          const n = Math.pow(2, zoom);
 
-              tilePromises.push(
-                new Promise((resolve) => {
-                  const img = new Image();
-                  img.crossOrigin = "anonymous";
-                  img.onload = () => resolve({ img, dx, dy });
-                  img.onerror = () => resolve(null);
-                  img.src = tileUrl;
-                  setTimeout(() => resolve(null), 1500);
-                })
-              );
+          // Calculate tile coordinates more precisely
+          const tileX = ((this.currentPosition.longitude + 180) / 360) * n;
+          const tileY = ((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2) * n;
+
+          // Get the tile indices
+          const tileXInt = Math.floor(tileX);
+          const tileYInt = Math.floor(tileY);
+
+          // Calculate pixel offset within the tile
+          const pixelOffsetX = (tileX - tileXInt) * 256;
+          const pixelOffsetY = (tileY - tileYInt) * 256;
+
+          // Calculate how many tiles we need to cover the map area
+          const tilesX = Math.ceil(mapWidth / 256) + 1;
+          const tilesY = Math.ceil(mapHeight / 256) + 1;
+
+          // Calculate starting tile position to center the location
+          const startTileX = tileXInt - Math.floor(tilesX / 2);
+          const startTileY = tileYInt - Math.floor(tilesY / 2);
+
+          try {
+            // Load map tiles with better positioning
+            const tilePromises = [];
+
+            for (let dx = 0; dx < tilesX; dx++) {
+              for (let dy = 0; dy < tilesY; dy++) {
+                const tileXPos = startTileX + dx;
+                const tileYPos = startTileY + dy;
+
+                // Skip invalid tile coordinates
+                if (
+                  tileXPos < 0 ||
+                  tileYPos < 0 ||
+                  tileXPos >= n ||
+                  tileYPos >= n
+                ) {
+                  continue;
+                }
+
+                const tileUrl = `https://tile.openstreetmap.org/${zoom}/${tileXPos}/${tileYPos}.png`;
+
+                tilePromises.push(
+                  new Promise((resolve) => {
+                    const img = new Image();
+                    img.crossOrigin = "anonymous";
+                    img.onload = () => resolve({ img, dx, dy });
+                    img.onerror = () => resolve(null);
+                    img.src = tileUrl;
+                    setTimeout(() => resolve(null), 1500);
+                  })
+                );
+              }
             }
-          }
 
-          const tiles = await Promise.all(tilePromises);
-          let tilesLoaded = false;
+            const tiles = await Promise.all(tilePromises);
+            let tilesLoaded = false;
 
-          tiles.forEach((tile) => {
-            if (tile && tile.img) {
-              const x = tile.dx * tileSize - tileSize / 2;
-              const y = tile.dy * tileSize - tileSize / 2;
-              mapCtx.drawImage(tile.img, x, y, tileSize, tileSize);
-              tilesLoaded = true;
+            // Clear map canvas
+            mapCtx.fillStyle = "#f0f0f0";
+            mapCtx.fillRect(0, 0, mapWidth, mapHeight);
+
+            tiles.forEach((tile) => {
+              if (tile && tile.img) {
+                // Calculate position to center the user's location
+                const centerOffsetX = mapWidth / 2 - pixelOffsetX;
+                const centerOffsetY = mapHeight / 2 - pixelOffsetY;
+
+                const x =
+                  tile.dx * 256 + centerOffsetX - Math.floor(tilesX / 2) * 256;
+                const y =
+                  tile.dy * 256 + centerOffsetY - Math.floor(tilesY / 2) * 256;
+
+                mapCtx.drawImage(tile.img, x, y, 256, 256);
+                tilesLoaded = true;
+              }
+            });
+
+            if (tilesLoaded) {
+              // Cache the map canvas for video mode to prevent flickering
+              if (this.isRecording) {
+                this.cachedMapCanvas = document.createElement("canvas");
+                this.cachedMapCanvas.width = mapWidth;
+                this.cachedMapCanvas.height = mapHeight;
+                const cacheCtx = this.cachedMapCanvas.getContext("2d");
+                cacheCtx.drawImage(mapCanvas, 0, 0);
+                this.lastMapCacheKey = mapCacheKey;
+              }
+
+              ctx.drawImage(mapCanvas, mapX, mapY, mapWidth, mapHeight);
+            } else {
+              throw new Error("No tiles loaded");
             }
-          });
+          } catch (tileError) {
+            console.warn("Tile loading error:", tileError);
+            // Fallback map design
+            const mapGradient = mapCtx.createLinearGradient(0, 0, 0, mapHeight);
+            mapGradient.addColorStop(0, "#4a5568");
+            mapGradient.addColorStop(0.5, "#2d3748");
+            mapGradient.addColorStop(1, "#1a202c");
 
-          if (tilesLoaded) {
+            mapCtx.fillStyle = mapGradient;
+            mapCtx.fillRect(0, 0, mapWidth, mapHeight);
+
+            // Add grid pattern
+            mapCtx.strokeStyle = "rgba(255, 255, 255, 0.1)";
+            mapCtx.lineWidth = 1;
+            mapCtx.beginPath();
+            for (let i = 0; i <= 4; i++) {
+              const x = (mapWidth / 4) * i;
+              const y = (mapHeight / 4) * i;
+              mapCtx.moveTo(x, 0);
+              mapCtx.lineTo(x, mapHeight);
+              mapCtx.moveTo(0, y);
+              mapCtx.lineTo(mapWidth, y);
+            }
+            mapCtx.stroke();
+
+            // Cache fallback map for video mode
+            if (this.isRecording) {
+              this.cachedMapCanvas = document.createElement("canvas");
+              this.cachedMapCanvas.width = mapWidth;
+              this.cachedMapCanvas.height = mapHeight;
+              const cacheCtx = this.cachedMapCanvas.getContext("2d");
+              cacheCtx.drawImage(mapCanvas, 0, 0);
+              this.lastMapCacheKey = mapCacheKey;
+            }
+
             ctx.drawImage(mapCanvas, mapX, mapY, mapWidth, mapHeight);
-          } else {
-            throw new Error("No tiles loaded");
           }
-        } catch (tileError) {
-          // Fallback map design
-          const mapGradient = ctx.createLinearGradient(
-            mapX,
-            mapY,
-            mapX,
-            mapY + mapHeight
-          );
-          mapGradient.addColorStop(0, "#4a5568");
-          mapGradient.addColorStop(0.5, "#2d3748");
-          mapGradient.addColorStop(1, "#1a202c");
-
-          ctx.fillStyle = mapGradient;
-          ctx.fillRect(mapX, mapY, mapWidth, mapHeight);
-
-          // Add grid pattern
-          ctx.strokeStyle = "rgba(255, 255, 255, 0.1)";
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          for (let i = 0; i <= 4; i++) {
-            const x = mapX + (mapWidth / 4) * i;
-            const y = mapY + (mapHeight / 4) * i;
-            ctx.moveTo(x, mapY);
-            ctx.lineTo(x, mapY + mapHeight);
-            ctx.moveTo(mapX, y);
-            ctx.lineTo(mapX + mapWidth, y);
-          }
-          ctx.stroke();
         }
 
-        // Draw red location pin
+        // Draw red location pin (always at center)
         const pinX = mapX + mapWidth / 2;
         const pinY = mapY + mapHeight / 2;
         const pinSize = Math.min(mapWidth, mapHeight) * 0.15;
